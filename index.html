@@ -564,10 +564,11 @@ button.small{padding:6px 10px;font-size:12px}
   <div class="box">
     <h3>📂 الوضع الحقيقي (HTTPS)</h3>
     <div class="notice info">
-      <b>مؤجل.</b> يتطلب HTTPS + اجتياز اختبارات 6.3b/6.4b على مجلد حقيقي (فحص + كتابة + استرداد). حتى ذلك الحين، استخدم وضع المحاكاة.
-      مجرد توفر HTTPS لا يكفي للتفعيل التلقائي.
+      <b>اختبار قراءة فقط.</b> يعرض أسماء الملفات في جذر المجلد، ويحاول قراءة أول 200 حرف من أول ملف. لا يكتب أي بيانات.
+      زر «تنفيذ» بالأعلى يعمل في وضع المحاكاة.
     </div>
-    <button disabled style="opacity:.4;cursor:not-allowed">📂 فتح مجلد حقيقي (معطَّل)</button>
+    <button id="folderRealBtn" class="ghost" type="button">🔍 اختبار قراءة (showDirectoryPicker)</button>
+    <div id="folderRealDiag" class="hint" style="margin-top:8px"></div>
   </div>
 </section>
 <div id="toast" role="status" aria-live="polite"></div>
@@ -3313,15 +3314,17 @@ function findNearMisses(html, pattern, maxResults, mode){
 /* Fix 4: replaceAll support + Fix 7: dead code removed */
 function isValidISO8601(s) {
   if (typeof s !== 'string') return false;
-  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-  if (!m) return false;
-  var y = +m[1], mo = +m[2], d = +m[3], h = +m[4], mi = +m[5];
-  if (mo < 1 || mo > 12) return false;
-  if (h < 0 || h > 23) return false;
-  if (mi < 0 || mi > 59) return false;
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|[+-]\d{2}:\d{2})?$/);
+  if (!m || m[0] !== s) return false; // $ قد يطابق قبل سطر نهائي؛ اشترط تطابق السلسلة كاملة
+  var y = +m[1], mo = +m[2], d = +m[3], h = +m[4], mi = +m[5], sec = m[6] ? +m[6] : 0;
+  if (mo < 1 || mo > 12 || h < 0 || h > 23 || mi < 0 || mi > 59 || sec < 0 || sec > 60) return false; // sec>60: leap-second compatibility with folder validator
   var isLeap = (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0));
   var dim = [31, isLeap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   if (d < 1 || d > dim[mo - 1]) return false;
+  if (m[8] && m[8] !== 'Z') {
+    var tz = m[8].match(/^([+-])(\d{2}):(\d{2})$/);
+    if (!tz || +tz[2] > 23 || +tz[3] > 59) return false;
+  }
   return true;
 }
 function validatePatch(p, index){
@@ -4439,24 +4442,24 @@ exportBtn.addEventListener('click',function(){
 
 exportTestedBtn.addEventListener('click',function(){
   if(!lastRun || !lastRun.results){ toast('نفّذ فحصًا أو تطبيقًا أولًا', false); return; }
-  if(lastRun.aborted || lastRun.verifyFailed){ toast('❌ لا يمكن التصدير: آخر عملية فشلت في verify', false); return; }
+  if(lastRun.verifyFailed){ toast('❌ لا يمكن التصدير: آخر عملية فشلت في فحص التحقق (verify)', false); return; }
   var okIds = {};
   lastRun.results.forEach(function(r){ if(r.status === 'ok' || r.status === 'applied') okIds[r.id] = true; });
   var tested = PATCHES.filter(function(p){ return okIds[p.id]; });
-  if(!tested.length){ toast('لا رقع مختبرة ناجحة', false); return; }
+  if(!tested.length){ toast('ℹ️ لا توجد رقع ناجحة في آخر عملية لتصديرها', false); return; }
   var payload = {
     engine: 'Raqee3-Dev',
     engineVersion: ENGINE_VERSION,
     patchFormatVersion: PATCH_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
-    note: 'رقع مُختبرة فقط (' + tested.length + ' من ' + PATCHES.length + ')',
+    note: lastRun.verificationPassed ? ('رقع اجتازت خطوات التطبيق وverify الإجمالي (' + tested.length + ' من ' + PATCHES.length + ')') : ('رقع نجحت خطواتها فقط — التحقق الإجمالي لم يكتمل (' + tested.length + ' من ' + PATCHES.length + ')'),
     patches: tested
   };
   var blob = new Blob([JSON.stringify(payload, null, 2)], {type: 'application/json;charset=utf-8'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url;
-  a.download = 'patches-tested.json';
+  a.download = lastRun.verificationPassed ? 'patches-verified.json' : 'patches-tested-partial.json';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
   addHistory('ok', 'صدّرت '+tested.length+' رقعة مختبرة');
@@ -5134,19 +5137,7 @@ function folderFindDuplicatePaths(entries) {
 }
 
 function folderIsValidISO8601Date(s) {
-  if (typeof s !== 'string') return false;
-  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|[+-]\d{2}:\d{2})?$/);
-  if (!m) return false;
-  var y = +m[1], mo = +m[2], d = +m[3], h = +m[4], mi = +m[5], sec = m[6] ? +m[6] : 0;
-  if (mo < 1 || mo > 12 || h < 0 || h > 23 || mi < 0 || mi > 59 || sec < 0 || sec > 60) return false;
-  var isLeap = (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0));
-  var dim = [31, isLeap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (d < 1 || d > dim[mo - 1]) return false;
-  if (m[8] && m[8] !== 'Z') {
-    var tz = m[8].match(/^([+-])(\d{2}):(\d{2})$/);
-    if (!tz || +tz[2] > 23 || +tz[3] > 59) return false;
-  }
-  return true;
+  return isValidISO8601(s);
 }
 
 function folderValidateMap(map) {
@@ -5391,6 +5382,41 @@ async function folderRunBatch(dir, map) {
       folderMockDir = null;
     }
   });
+
+  var _realBtn = $('folderRealBtn');
+  if (_realBtn) {
+    _realBtn.addEventListener('click', async function() {
+      var diag = $('folderRealDiag');
+      diag.innerHTML = '<div class="notice info">⏳ فتح…</div>';
+      if (!window.showDirectoryPicker) {
+        diag.innerHTML = '<div class="notice err">❌ المتصفح لا يدعم showDirectoryPicker</div>';
+        return;
+      }
+      try {
+        var h = await window.showDirectoryPicker({ mode: 'read' });
+        var count = 0, names = [];
+        for await (var entry of h.values()) {
+          if (entry.kind === 'file') { count++; if (names.length < 5) names.push(entry.name); }
+        }
+        var firstFileText = null, firstName = null;
+        if (names.length > 0) {
+          firstName = names[0];
+          try {
+            var fh = await h.getFileHandle(firstName);
+            var f = await fh.getFile();
+            var txt = await f.text();
+            firstFileText = txt.slice(0, 200);
+          } catch (e) { firstFileText = 'ERROR: ' + e.message; }
+        }
+        diag.innerHTML = '<div class="notice ok">✅ <b>' + count + '</b> ملف في الجذر<br>عينات: ' + escHtml(names.join(', ')) + (count > 5 ? '…' : '') + '</div>' +
+          (firstName ? '<div class="notice info">📄 قراءة أول ملف (<b>' + escHtml(firstName) + '</b>):<br><pre style="direction:ltr;text-align:left;font-size:11px;max-height:120px;overflow:auto;background:#020617;padding:6px;border-radius:4px;margin:6px 0 0 0">' + escHtml(firstFileText || '') + '</pre></div>' : '') +
+          '<div class="notice warn" style="margin-top:6px">ℹ️ قراءة فقط. لم تُكتب أي بيانات.</div>';
+      } catch (err) {
+        if (err.name === 'AbortError') { diag.innerHTML = '<div class="notice warn">أُلغي الاختيار.</div>'; return; }
+        diag.innerHTML = '<div class="notice err">❌ ' + escHtml(err.name + ': ' + err.message) + '</div>';
+      }
+    });
+  }
 
   $('folderMapDefault').addEventListener('click', function() {
     var patchIds = PATCHES.map(function(p) { return p.id; }).slice(0, 3);
