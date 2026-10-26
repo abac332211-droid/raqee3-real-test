@@ -1,5 +1,5 @@
-/* ============ Sprint 7.2 — Service Worker (Final) ============ */
-const CACHE = 'raqee3-v1';
+/* ============ Sprint 7.2 — Service Worker (Final v2) ============ */
+const CACHE = 'raqee3-v2';
 const ASSETS = [
   './',
   './index.html',
