@@ -4230,6 +4230,7 @@ function applyAllPatches(html, opts){
       html: html, lines: ['<span class="skip">ℹ️ لا رقع مُفعَّلة — لا تعديل.</span>'],
       ok: 0, applied: 0, skip: 0, fail: 0,
       patchesSucceeded: 0, verificationPassed: true,
+      verificationState: 'not-applicable',
       outputAccepted: false, aborted: true, allDisabled: true,
       verifyFailed: false, results: []
     };
@@ -4242,6 +4243,7 @@ function applyAllPatches(html, opts){
       lines: validation.errors.map(function(e){return '<span class="fail">❌ '+escHtml(e)+'</span>'}),
       ok: 0, applied: 0, skip: 0, fail: onlyEnabled.length,
       patchesSucceeded: 0, verificationPassed: false,
+      verificationState: 'not-run',
       outputAccepted: false, aborted: true, allDisabled: false,
       verifyFailed: false, results: []
     };
@@ -4279,6 +4281,7 @@ function applyAllPatches(html, opts){
       ok: ok, applied: applied, skip: skip, fail: fail,
       patchesSucceeded: ok + applied,
       verificationPassed: false,
+      verificationState: 'not-run',
       outputAccepted: false, aborted: true, allDisabled: false,
       verifyFailed: false, results: results
     };
@@ -4302,6 +4305,8 @@ function applyAllPatches(html, opts){
           ok: ok, applied: applied, skip: skip, fail: 0,
           patchesSucceeded: ok + applied,
           verificationPassed: false,
+          verificationState: 'failed',
+          verificationSkipped: _verifySkipped,
           outputAccepted: false, aborted: true, allDisabled: false,
           verifyFailed: true, results: results
         };
@@ -4321,6 +4326,7 @@ function applyAllPatches(html, opts){
       patchesSucceeded: applied,
       verificationPassed: _verifySkipped === 0,
       verificationStatus: _verifySkipped === 0 ? 'ok' : 'partial',
+      verificationState: _verifySkipped > 0 ? 'skipped' : 'passed',
       verificationSkipped: _verifySkipped,
       outputAccepted: false, aborted: false, allDisabled: false,
       verifyFailed: false, results: results
@@ -4333,6 +4339,7 @@ function applyAllPatches(html, opts){
       ok: ok, applied: applied, skip: skip, fail: fail,
       patchesSucceeded: ok + applied,
       verificationPassed: false,
+      verificationState: 'not-run',
       outputAccepted: false, aborted: true, allDisabled: false,
       verifyFailed: false, results: results
     };
@@ -4344,6 +4351,7 @@ function applyAllPatches(html, opts){
     patchesSucceeded: ok,
     verificationPassed: _verifySkipped === 0,
     verificationStatus: _verifySkipped === 0 ? 'ok' : 'partial',
+    verificationState: _verifySkipped > 0 ? 'skipped' : 'passed',
     verificationSkipped: _verifySkipped,
     outputAccepted: true, aborted: false, allDisabled: false,
     verifyFailed: false, results: results
@@ -4567,6 +4575,7 @@ function testSelectedPatch(p){
     fail:res.status === 'failed' ? 1 : 0,
     verifyFailed:false,
     verificationPassed:null,
+    verificationState:'not-run',
     aborted:false,
     outputAccepted:false,
     allDisabled:false,
@@ -5251,6 +5260,7 @@ function evidenceSerializeRun(kind, res, extra){
     ok:Number(run.ok || 0), applied:Number(run.applied || 0), skip:Number(run.skip || 0), fail:Number(run.fail || 0),
     verifyFailed:!!run.verifyFailed,
     verificationPassed:typeof run.verificationPassed === 'boolean' ? run.verificationPassed : null,
+    verificationState:resolveVerificationState(run),
     verificationSkipped:typeof run.verificationSkipped === 'number' ? run.verificationSkipped : 0,
     aborted:!!run.aborted,
     outputAccepted:!!run.outputAccepted,
@@ -5282,28 +5292,41 @@ function evidenceSerializeRun(kind, res, extra){
   }
   return record;
 }
+/* PR2-VERIFICATION-STATE-FIX-006 — explicit verification lifecycle */
+function resolveVerificationState(run){
+  run = run || {};
+  var allowed = ['passed', 'failed', 'skipped', 'not-run', 'not-applicable'];
+  if(allowed.indexOf(run.verificationState) !== -1) return run.verificationState;
+  if(run.allDisabled === true) return 'not-applicable';
+  if(run.verifyFailed === true) return 'failed';
+  if(typeof run.verificationSkipped === 'number' && run.verificationSkipped > 0) return 'skipped';
+  if(run.verificationPassed === true) return 'passed';
+  return 'not-run';
+}
 function evidenceRenderRun(record){
-  var _vSkipped = (record.verificationSkipped || 0) > 0;
+  var _verificationState = resolveVerificationState(record);
+  var _verificationSkippedCount = typeof record.verificationSkipped === 'number' ? record.verificationSkipped : 0;
   var verifyLabel;
-  if (record.verificationPassed === true) {
+  if (_verificationState === 'passed') {
     verifyLabel = record.operation === 'dry-run' ? 'passed (dry-run؛ لا يثبت الكتابة)' : 'passed';
-  } else if (record.verifyFailed === true) {
+  } else if (_verificationState === 'failed') {
     verifyLabel = 'failed';
-  } else if (record.verificationPassed === false && _vSkipped) {
-    verifyLabel = 'skipped (' + record.verificationSkipped + ' رقعة بلا verify)';
-  } else if (record.verificationPassed === false) {
-    verifyLabel = 'failed';
+  } else if (_verificationState === 'skipped') {
+    verifyLabel = 'skipped (' + _verificationSkippedCount + ' رقعة بلا verify)';
+  } else if (_verificationState === 'not-applicable') {
+    verifyLabel = 'not-applicable';
   } else {
-    verifyLabel = 'not completed';
+    verifyLabel = 'not-run';
   }
   var judgement;
   if(record.operation === 'dry-run') judgement = 'dry-run only — no file write was performed';
-  else if(record.verifyFailed === true) judgement = 'verify-failed';
-  else if(record.verificationPassed === false && _vSkipped) judgement = 'verify-skipped (patches without verify; not proof of failure)';
-  else if(record.verificationPassed === false) judgement = 'verify-failed';
+  else if(_verificationState === 'failed') judgement = 'verify-failed';
+  else if(_verificationState === 'skipped') judgement = 'verify-skipped (patches without verify; not proof of failure)';
+  else if(_verificationState === 'not-applicable') judgement = 'verify-not-applicable (no enabled patches; no verification required)';
+  else if(_verificationState === 'not-run') judgement = 'verify-not-run (engine verification was not executed)';
   else if(record.actualFileSha256 && record.outputSha256 && record.actualFileSha256 !== record.outputSha256) judgement = 'WARNING: actual disk SHA-256 differs from candidate; inspect the file and rollback status';
-  else if(record.actualFileSha256 && record.outputSha256 && record.actualFileSha256 === record.outputSha256 && String(record.saveStatus || '').indexOf('direct-write-success') !== -1) judgement = record.verificationPassed === true ? 'verify-passed (engine verify + evidence logger confirmed actual disk SHA-256 matches candidate)' : 'actual disk SHA-256 matches candidate; engine verify incomplete';
-  else if(record.verificationPassed === true) judgement = 'verify-passed (engine level only; physical save not proven by this record)';
+  else if(record.actualFileSha256 && record.outputSha256 && record.actualFileSha256 === record.outputSha256 && String(record.saveStatus || '').indexOf('direct-write-success') !== -1) judgement = 'verify-passed (engine verify + evidence logger confirmed actual disk SHA-256 matches candidate)';
+  else if(_verificationState === 'passed') judgement = 'verify-passed (engine level only; physical save not proven by this record)';
   else judgement = 'not fully verified';
   var lines = [
     '<!-- evidence-id: ' + record.id + ' -->',
