@@ -7,7 +7,7 @@
 <link rel="manifest" href="./manifest.json">
 <meta name="theme-color" content="#0f172a">
 <link rel="apple-touch-icon" href="./icon-192.png">
-<title>رقيع المطور v7.0.8 — Hardening Release (Browser QA Pending)</title>
+<title>رقيع المطور v8.0.0 — PR-2 NFC Candidate (Browser QA Pending)</title>
 <style>
 *{box-sizing:border-box}
 body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:16px;line-height:1.6}
@@ -192,12 +192,12 @@ html[data-theme="light"] #scriptDiffResult { background: #020617 !important; bor
 
 <header>
   <div>
-    <h1>🔧 رقيع المطور v7.0.8</h1>
+    <h1>🔧 رقيع المطور v8.0.0</h1>
     <p class="sub">محرك رقع + مدقّق JSON + مقارن LCS + منظّف نصوص — Local-First.</p>
 
     <button id="themeToggle" class="ghost small" style="margin-top:6px;" type="button">☀️ تفعيل الوضع النهاري</button>
   </div>
-  <span class="badge warn">🛡️ v7.0.8 — Hardening Release · فحص المتصفح مطلوب</span>
+  <span class="badge warn">🛡️ v8.0.0 — PR-2 NFC Candidate · فحص المتصفح مطلوب</span>
 </header>
 
 <div class="tabs" role="tablist">
@@ -257,10 +257,10 @@ html[data-theme="light"] #scriptDiffResult { background: #020617 !important; bor
   <div class="box">
     <h3>5. التنفيذ</h3>
     <div class="opts" style="margin-bottom:8px">
-      <label class="opt"><input type="checkbox" id="patchSmartSearch"><span>🔤 <b>بحث ذكي</b> — تجاهل الهمزات/التشكيل/التاء المربوطة/المحارف المخفية أثناء مطابقة <code>find</code>. نص الاستبدال يبقى كما كُتب، ويُحافَظ على التشكيل المتجاوز داخل التطابق قدر الإمكان.</span></label>
+      <label class="opt"><input type="checkbox" id="patchSmartSearch"><span>🔤 <b>بحث ذكي</b> — تطبيع NFC وتجاهل الهمزات/التشكيل/التاء المربوطة/المحارف المخفية أثناء مطابقة <code>find</code>. نص الاستبدال يبقى كما كُتب، ويُحافَظ على التشكيل المتجاوز داخل التطابق قدر الإمكان.</span></label>
     </div>
-    <!-- W-2: NFC not applied in patch search -->
-    <div class="hint" style="margin-top:6px">ℹ️ تطبيع NFC غير مطبَّق في بحث الرقع (بخلاف تبويب المقارن)، لتفادي انزياح مواضع المطابقة. الهمزات/التشكيل/التاء المربوطة/المحارف المخفية تُعالج، لكن التسلسلات المركّبة (e+́ ↔ é) لا تُعتبر متطابقة.</div>
+    <!-- PR-2: NFC search normalization retains original UTF-16 source ranges. -->
+    <div class="hint" style="margin-top:6px">ℹ️ يطبّق بحث الرقع تطبيع NFC مع خريطة إلى مواضع النص الأصلي بوحدات UTF-16؛ تُرفض المطابقة الجزئية داخل مقطع تغيّر تركيبه إذا تعذّر تحديد حدوده الأصلية بدقة.</div>
     <div class="btn-row">
       <button class="ghost" id="dryBtn" disabled>🔍 فحص فقط</button>
       <button id="applyBtn" disabled>⚡ طبّق الرقعات</button>
@@ -303,7 +303,7 @@ html[data-theme="light"] #scriptDiffResult { background: #020617 !important; bor
 
   <div class="box">
     <h3>📋 السجل التفصيلي <button class="ghost small" id="logCopyBtn" type="button" style="margin-right:8px">📋 نسخ</button></h3>
-    <div id="log"><span class="meta">رقيع المطور v7.0.8 جاهز.</span></div>
+    <div id="log"><span class="meta">رقيع المطور v8.0.0 جاهز.</span></div>
   </div>
 </section>
 
@@ -3234,7 +3234,7 @@ document.getElementById('jsonSelfTestBtn').addEventListener('click',function(){
 /* ================================================================
    PATCH ENGINE v6.5
    ================================================================ */
-var ENGINE_VERSION = '7.0.8';
+var ENGINE_VERSION = '8.0.0';
 var PATCH_FORMAT_VERSION = 3;
 var VALID_MATCH_MODES = ['strict', 'flex'];
 var VALID_VERIFY_TYPES = ['exists', 'absent', 'count'];
@@ -3402,13 +3402,13 @@ function validateSpecArray(list, label, patchIndex, errors){
       errors.push(where + ': scope يجب أن يكون نصًا غير فارغ');
   });
 }
-/* ===== Sprint 3.2: البحث الذكي في الرقع — تطبيع مع خريطة مواضع ===== */
+/* ===== PR-2 v8.0.0 candidate: NFC normalization with source-range mapping ===== */
 function getPatchSmartOpts() {
   var el = document.getElementById('patchSmartSearch');
   return {
     enabled: !!(el && el.checked),
-    // NFC متروك عمدًا في البحث الذكي: تطبيقه على النص دون خريطة grapheme كاملة قد يزيح المواقع.
-    unicodeNfc: false,
+    // NFC is enabled only in smart patch search; original text is never rewritten by normalization.
+    unicodeNfc: true,
     tashkeel: true,
     alef: true,
     teh: true,
@@ -3418,169 +3418,275 @@ function getPatchSmartOpts() {
   };
 }
 
-// تطبيع البحث مع خريطة norm-index -> range داخل النص الأصلي.
-// خريطة مواضع متناثرة لتغيّرات الأطوال فقط؛ لا نخصص خانة لكل محرف.
-// لا يُطبّق NFC في البحث الذكي لتفادي تطبيع النمط دون النص وفقد مطابقة المواضع.
-/* NFC offset map — begin: PR2 */
-var _nfcSegInit = false;
-var _nfcSeg = null;
-var _nfcSegForceDisabled = false;
-var _combReInit = false;
-var _combRe = null;
-var _combReForceDisabled = false;
+var _patchNfcMarkRegex = null;
+var _patchNfcMarkRegexChecked = false;
+// Keep sparse mapping memory bounded; repeated fixed-size changed segments are run-compressed.
+var PATCH_NFC_MAX_MAP_RUNS = 65536;
+function isPatchNfcMark(codePoint, value) {
+  if (!_patchNfcMarkRegexChecked) {
+    _patchNfcMarkRegexChecked = true;
+    try { _patchNfcMarkRegex = new RegExp('\\p{M}', 'u'); } catch (e) { _patchNfcMarkRegex = null; }
+  }
+  if (_patchNfcMarkRegex) return _patchNfcMarkRegex.test(value);
+  // Conservative fallback for common combining-mark blocks. The segment builder
+  // additionally validates against whole-string NFC and falls back atomically if needed.
+  return (codePoint >= 0x0300 && codePoint <= 0x036F) ||
+    (codePoint >= 0x0483 && codePoint <= 0x0489) ||
+    (codePoint >= 0x0591 && codePoint <= 0x05C7) ||
+    (codePoint >= 0x0610 && codePoint <= 0x061A) ||
+    (codePoint >= 0x064B && codePoint <= 0x065F) || codePoint === 0x0670 ||
+    (codePoint >= 0x06D6 && codePoint <= 0x06ED) ||
+    (codePoint >= 0x0711 && codePoint <= 0x074A) ||
+    (codePoint >= 0x07A6 && codePoint <= 0x07B0) ||
+    (codePoint >= 0x0816 && codePoint <= 0x082D) ||
+    (codePoint >= 0x0859 && codePoint <= 0x085B) ||
+    (codePoint >= 0x08D3 && codePoint <= 0x0903) ||
+    (codePoint >= 0x093A && codePoint <= 0x094F) ||
+    (codePoint >= 0x1AB0 && codePoint <= 0x1AFF) ||
+    (codePoint >= 0x1DC0 && codePoint <= 0x1DFF) ||
+    (codePoint >= 0x20D0 && codePoint <= 0x20FF) ||
+    (codePoint >= 0xFE20 && codePoint <= 0xFE2F);
+}
 
-function _resetNfcSegmenterCache(forceNull) {
-  _nfcSegInit = true;
-  _nfcSeg = null;
-  _nfcSegForceDisabled = !!forceNull;
-  if (!_nfcSegForceDisabled && typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
-    try { _nfcSeg = new Intl.Segmenter(undefined, {granularity:'grapheme'}); } catch (_e) { _nfcSeg = null; }
-  }
-}
-function _forceDisableSegmenter(value) {
-  _resetNfcSegmenterCache(!!value);
-}
-function _getNfcSegmenter() {
-  if (!_nfcSegInit) _resetNfcSegmenterCache(false);
-  return _nfcSegForceDisabled ? null : _nfcSeg;
-}
-function _resetNfcCombiningRegexCache(forceNull) {
-  _combReInit = true;
-  _combRe = null;
-  _combReForceDisabled = !!forceNull;
-  if (!_combReForceDisabled) {
-    try { _combRe = new RegExp('\\p{M}', 'u'); } catch (_e) { _combRe = null; }
-  }
-}
-function _forceDisableCombiningRegex(value) {
-  _resetNfcCombiningRegexCache(!!value);
-}
-function _getCombiningRegex() {
-  if (!_combReInit) _resetNfcCombiningRegexCache(false);
-  return _combReForceDisabled ? null : _combRe;
-}
-function _isCombiningChar(ch) {
-  var re = _getCombiningRegex();
-  if (re) { try { return re.test(ch); } catch (_e) {} }
-  var cp = ch.codePointAt(0);
-  return (cp >= 0x0300 && cp <= 0x036F) ||
-    (cp >= 0x0483 && cp <= 0x0489) ||
-    (cp >= 0x0591 && cp <= 0x05BD) || cp === 0x05BF ||
-    (cp >= 0x05C1 && cp <= 0x05C2) ||
-    (cp >= 0x0610 && cp <= 0x061A) ||
-    (cp >= 0x064B && cp <= 0x065F) || cp === 0x0670 ||
-    (cp >= 0x06D6 && cp <= 0x06ED) ||
-    (cp >= 0x1AB0 && cp <= 0x1AFF) ||
-    (cp >= 0x1DC0 && cp <= 0x1DFF) ||
-    (cp >= 0x20D0 && cp <= 0x20FF) ||
-    (cp >= 0xFE20 && cp <= 0xFE2F);
-}
-function splitIntoClusters(source) {
-  source = String(source);
-  var seg = _getNfcSegmenter(), out = [];
-  if (seg) {
-    try {
-      var iterator = seg.segment(source);
-      for (var item of iterator) {
-        out.push({text:item.segment, start:item.index, end:item.index + item.segment.length});
-      }
-      return out;
-    } catch (_e) {}
-  }
-  var i = 0;
-  while (i < source.length) {
-    var start = i;
-    var cp = source.codePointAt(i);
-    var ch = String.fromCodePoint(cp);
-    i += ch.length;
-    while (i < source.length) {
-      var nextCp = source.codePointAt(i);
-      var next = String.fromCodePoint(nextCp);
-      if (_isCombiningChar(next)) { i += next.length; continue; }
-      if (nextCp === 0xFE0F || nextCp === 0xFE0E) { i += next.length; continue; }
-      if (nextCp === 0x200D) {
-        i += next.length;
-        if (i < source.length) {
-          var joined = String.fromCodePoint(source.codePointAt(i));
-          i += joined.length;
-          continue;
-        }
-      }
-      break;
+function patchNfcCodePointAt(value, index) {
+  var first = value.charCodeAt(index);
+  if (first >= 0xD800 && first <= 0xDBFF && index + 1 < value.length) {
+    var second = value.charCodeAt(index + 1);
+    if (second >= 0xDC00 && second <= 0xDFFF) {
+      return { codePoint: 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00), length: 2 };
     }
-    out.push({text:source.slice(start,i), start:start, end:i});
   }
-  return out;
+  return { codePoint: first, length: 1 };
 }
-function nfcCluster(text) {
-  text = String(text);
-  try { return text.normalize('NFC'); } catch (_e) { return text; }
+
+function isPatchHangulJamo(codePoint) {
+  return (codePoint >= 0x1100 && codePoint <= 0x11FF) ||
+    (codePoint >= 0xA960 && codePoint <= 0xA97F) ||
+    (codePoint >= 0xD7B0 && codePoint <= 0xD7FF);
 }
-function _validateSegments(segments, normLength, rawLength) {
-  if (!Array.isArray(segments)) return false;
-  if (!Number.isInteger(normLength) || !Number.isInteger(rawLength) || normLength < 0 || rawLength < 0) return false;
-  var normAt = 0, rawAt = 0;
-  for (var i = 0; i < segments.length; i++) {
-    var s = segments[i];
-    if (!s || typeof s !== 'object') return false;
-    if (!Number.isInteger(s.normStart) || !Number.isInteger(s.normEnd) ||
-        !Number.isInteger(s.rawStart) || !Number.isInteger(s.rawEnd)) return false;
-    if (s.normStart < 0 || s.rawStart < 0 || s.normEnd < s.normStart || s.rawEnd < s.rawStart) return false;
-    if (s.normStart !== normAt || s.rawStart !== rawAt) return false;
-    normAt = s.normEnd;
-    rawAt = s.rawEnd;
+
+function isPatchHangulSyllable(codePoint) {
+  return codePoint >= 0xAC00 && codePoint <= 0xD7A3;
+}
+
+function buildPatchNfcSourceMap(source) {
+  if (typeof source.normalize !== 'function') {
+    return { text: source, atomicSegments: [], originalLength: source.length, supported: false, fallbackWholeString: false };
   }
-  return normAt === normLength && rawAt === rawLength;
-}
-function buildNormalizedView(source) {
-  source = String(source);
-  var clusters = splitIntoClusters(source), normalized = '', segments = [];
-  for (var i = 0; i < clusters.length; i++) {
-    var c = clusters[i], value = nfcCluster(c.text);
-    var start = normalized.length;
-    normalized += value;
-    segments.push({normStart:start, normEnd:normalized.length, rawStart:c.start, rawEnd:c.end});
+
+  var atomicSegments = [];
+  var segmentStart = 0;
+  var previousCodePoint = -1;
+  var index = 0;
+  var normalizedLength = 0;
+  var output = '';
+  var copiedUntil = 0;
+  var changed = false;
+  var mapOverflow = false;
+
+  function flushSegment(segmentEnd) {
+    if (segmentEnd <= segmentStart) return;
+    var originalSegment = source.slice(segmentStart, segmentEnd);
+    var normalizedSegment;
+    try { normalizedSegment = originalSegment.normalize('NFC'); }
+    catch (e) { normalizedSegment = originalSegment; }
+
+    // Preserve cluster boundaries even when NFC leaves the segment text unchanged.
+    // Otherwise a search for the base letter alone could split an Arabic/Unicode
+    // grapheme (for example, "ك" inside "كَ") and strand its combining marks.
+    var hasAtomicInterior = Array.from(originalSegment).length > 1;
+    if (normalizedSegment !== originalSegment || hasAtomicInterior) {
+      if (normalizedSegment !== originalSegment) {
+        output += source.slice(copiedUntil, segmentStart) + normalizedSegment;
+        copiedUntil = segmentEnd;
+        changed = true;
+      }
+      var normalizedSegmentLength = normalizedSegment.length;
+      var originalSegmentLength = segmentEnd - segmentStart;
+      var firstNormalized = normalizedSegmentLength ? patchNfcCodePointAt(normalizedSegment, 0) : null;
+      var baseNormStep = firstNormalized && !isPatchNfcMark(
+        firstNormalized.codePoint, normalizedSegment.slice(0, firstNormalized.length)
+      ) ? firstNormalized.length : 0;
+      var lastRun = atomicSegments.length ? atomicSegments[atomicSegments.length - 1] : null;
+      if (lastRun && lastRun.normEnd === normalizedLength &&
+          lastRun.originalEnd === segmentStart &&
+          lastRun.normStep === normalizedSegmentLength &&
+          lastRun.originalStep === originalSegmentLength &&
+          lastRun.baseNormStep === baseNormStep) {
+        lastRun.normEnd += normalizedSegmentLength;
+        lastRun.originalEnd = segmentEnd;
+        lastRun.count++;
+      } else if (atomicSegments.length < PATCH_NFC_MAX_MAP_RUNS) {
+        atomicSegments.push({
+          normStart: normalizedLength,
+          normEnd: normalizedLength + normalizedSegmentLength,
+          originalStart: segmentStart,
+          originalEnd: segmentEnd,
+          normStep: normalizedSegmentLength,
+          originalStep: originalSegmentLength,
+          baseNormStep: baseNormStep,
+          count: 1
+        });
+      } else {
+        mapOverflow = true;
+      }
+    }
+    normalizedLength += normalizedSegment.length;
   }
-  if (!_validateSegments(segments, normalized.length, source.length)) {
-    return {valid:false, text:source, segments:[]};
+
+  while (index < source.length) {
+    var item = patchNfcCodePointAt(source, index);
+    var value = source.slice(index, index + item.length);
+    var isMark = isPatchNfcMark(item.codePoint, value);
+    var currentIsHangul = isPatchHangulJamo(item.codePoint) || isPatchHangulSyllable(item.codePoint);
+    var previousIsHangul = isPatchHangulJamo(previousCodePoint) || isPatchHangulSyllable(previousCodePoint);
+    var joinsPrevious = index > segmentStart && (isMark || (currentIsHangul && previousIsHangul));
+
+    if (index > segmentStart && !joinsPrevious) {
+      flushSegment(index);
+      segmentStart = index;
+    }
+    previousCodePoint = item.codePoint;
+    index += item.length;
   }
-  return {valid:true, text:normalized, segments:segments};
-}
-function originalStartForNfcIndex(view, index) {
-  if (!view || !view.valid || !Number.isInteger(index) || index < 0 || index > view.text.length) return -1;
-  if (index === view.text.length) return view.segments.length ? view.segments[view.segments.length-1].rawEnd : 0;
-  for (var i = 0; i < view.segments.length; i++) {
-    var s = view.segments[i];
-    if (index === s.normStart) return s.rawStart;
-    if (index > s.normStart && index < s.normEnd) return -1;
+  flushSegment(source.length);
+
+  if (!changed) return { text: source, atomicSegments: atomicSegments, originalLength: source.length, supported: true, fallbackWholeString: false };
+  output += source.slice(copiedUntil);
+
+  // Defensive equivalence check: if segmentation ever diverges from whole-string NFC,
+  // permit only a whole-string match. This preserves correctness at the cost of granularity.
+  var wholeNormalized;
+  try { wholeNormalized = source.normalize('NFC'); }
+  catch (e) { return { text: source, atomicSegments: [], originalLength: source.length, supported: false, fallbackWholeString: false }; }
+  if (output !== wholeNormalized || mapOverflow) {
+    return {
+      text: wholeNormalized,
+      atomicSegments: (wholeNormalized === source && !mapOverflow) ? [] : [{
+        normStart: 0,
+        normEnd: wholeNormalized.length,
+        originalStart: 0,
+        originalEnd: source.length,
+        normStep: wholeNormalized.length,
+        originalStep: source.length,
+        baseNormStep: 0,
+        count: 1
+      }],
+      originalLength: source.length,
+      supported: true,
+      fallbackWholeString: true
+    };
   }
-  return -1;
+  return { text: output, atomicSegments: atomicSegments, originalLength: source.length, supported: true, fallbackWholeString: false };
 }
-function originalEndForNfcIndex(view, end) {
-  if (!view || !view.valid || !Number.isInteger(end) || end < 0 || end > view.text.length) return -1;
-  if (end === 0) return 0;
-  for (var i = 0; i < view.segments.length; i++) {
-    var s = view.segments[i];
-    if (end === s.normEnd) return s.rawEnd;
-    if (end > s.normStart && end < s.normEnd) return -1;
+
+function patchNfcBoundaryIsSafe(nfcMap, normIndex) {
+  var segments = nfcMap && nfcMap.atomicSegments;
+  if (!segments || !segments.length) return true;
+  var lo = 0, hi = segments.length;
+  while (lo < hi) {
+    var mid = (lo + hi) >>> 1;
+    if (segments[mid].normEnd < normIndex) lo = mid + 1;
+    else hi = mid;
   }
-  return -1;
+  if (lo >= segments.length) return true;
+  var segment = segments[lo];
+  if (normIndex <= segment.normStart || normIndex >= segment.normEnd) return true;
+  return ((normIndex - segment.normStart) % segment.normStep) === 0;
 }
-/* NFC offset map — end: PR2 */
+
+function patchNfcRangeIsSafe(nfcMap, start, end) {
+  return start <= end && patchNfcBoundaryIsSafe(nfcMap, start) && patchNfcBoundaryIsSafe(nfcMap, end);
+}
+
+function originalNfcBoundaryToSourceIndex(nfcMap, normIndex) {
+  var segments = nfcMap && nfcMap.atomicSegments;
+  if (!segments || !segments.length) return normIndex;
+  var lo = 0, hi = segments.length;
+  while (lo < hi) {
+    var mid = (lo + hi) >>> 1;
+    if (segments[mid].normEnd < normIndex) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo < segments.length) {
+    var segment = segments[lo];
+    if (normIndex === segment.normStart) return segment.originalStart;
+    if (normIndex === segment.normEnd) return segment.originalEnd;
+    if (normIndex > segment.normStart && normIndex < segment.normEnd) {
+      var relativeNorm = normIndex - segment.normStart;
+      if (relativeNorm % segment.normStep !== 0) return null;
+      var stepIndex = relativeNorm / segment.normStep;
+      if (stepIndex < 0 || stepIndex > segment.count) return null;
+      return segment.originalStart + (stepIndex * segment.originalStep);
+    }
+  }
+  var previous = lo ? segments[lo - 1] : null;
+  return normIndex + (previous ? previous.originalEnd - previous.normEnd : 0);
+}
+
+// Map an original source boundary to the NFC boundary immediately before its source unit.
+// For a combining mark absorbed into a composed NFC segment, use the end of the segment's
+// normalized starter; ambiguous whole-document fallback interiors return null.
+function sourceBoundaryToNfcIndex(nfcMap, originalIndex) {
+  var segments = nfcMap && nfcMap.atomicSegments;
+  if (!segments || !segments.length) return originalIndex;
+  var lo = 0, hi = segments.length;
+  while (lo < hi) {
+    var mid = (lo + hi) >>> 1;
+    if (segments[mid].originalEnd < originalIndex) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo < segments.length) {
+    var segment = segments[lo];
+    if (originalIndex === segment.originalStart) return segment.normStart;
+    if (originalIndex === segment.originalEnd) return segment.normEnd;
+    if (originalIndex > segment.originalStart && originalIndex < segment.originalEnd) {
+      if (nfcMap.fallbackWholeString) return null;
+      var relativeOriginal = originalIndex - segment.originalStart;
+      var stepIndex = Math.floor(relativeOriginal / segment.originalStep);
+      var intraStep = relativeOriginal - (stepIndex * segment.originalStep);
+      if (intraStep === 0) return segment.normStart + (stepIndex * segment.normStep);
+      return segment.normStart + (stepIndex * segment.normStep) + segment.baseNormStep;
+    }
+  }
+  var previous = lo ? segments[lo - 1] : null;
+  return originalIndex - (previous ? previous.originalEnd - previous.normEnd : 0);
+}
+
+function searchIndexForNfcBoundary(normResult, nfcIndex) {
+  var at = normResult.eventAt, count = normResult.eventCount || 0;
+  if (!at || !count) return nfcIndex;
+  var lo = 0, hi = count;
+  while (lo < hi) {
+    var mid = (lo + hi) >>> 1;
+    var previousDelta = mid ? normResult.eventDelta[mid - 1] : 0;
+    var eventNfcAt = at[mid] + previousDelta;
+    if (eventNfcAt < nfcIndex) lo = mid + 1;
+    else hi = mid;
+  }
+  var removedBefore = lo ? normResult.eventDelta[lo - 1] : 0;
+  return nfcIndex - removedBefore;
+}
+
+// Search normalization with two mapping layers:
+// final-search-index -> NFC-source-index (sparse transform deltas), then
+// NFC-source-index -> original-source-range (atomic changed NFC segments).
 function normalizeForSearch(str, opts, withMap) {
-  var source = String(str);
-
-  var nfcView = null;
-  if (opts && opts.unicodeNfc) {
-    nfcView = buildNormalizedView(source);
-    if (nfcView && nfcView.valid) {
-      source = nfcView.text;
-    } else {
-      nfcView = null;
-    }
-  }
+  var originalSource = String(str);
   var enabled = !!(opts && opts.enabled);
   if (withMap === undefined) withMap = true;
+
+  var nfcMap = null;
+  var source = originalSource;
+  if (enabled && opts && opts.unicodeNfc && typeof originalSource.normalize === 'function') {
+    if (withMap) {
+      nfcMap = buildPatchNfcSourceMap(originalSource);
+      source = nfcMap.text;
+    } else {
+      try { source = originalSource.normalize('NFC'); } catch (e) { source = originalSource; }
+    }
+  }
+
   var eventAt = null, eventDelta = null, eventEndDelta = null, eventCount = 0;
   var delta = 0;
 
@@ -3635,7 +3741,10 @@ function normalizeForSearch(str, opts, withMap) {
 
     var isTashkeel = (code >= 0x064B && code <= 0x065F) || code === 0x0670;
     if (opts.tashkeel && (isTashkeel || code === 0x0640)) {
-      if (isTashkeel) addDelta(offset - delta, match.length, 0);
+      // Trailing tashkeel belongs to the matched source range so it can be preserved
+      // by smartReplacementText. Tatweel still shifts following match starts.
+      if (isTashkeel) addDelta(offset - delta, match.length, match.length);
+      else addDelta(offset - delta, match.length, 0);
       delta += match.length;
       return '';
     }
@@ -3669,13 +3778,13 @@ function normalizeForSearch(str, opts, withMap) {
     eventDelta: eventDelta,
     eventEndDelta: eventEndDelta,
     eventCount: eventCount,
+    nfcMap: nfcMap,
     enabled: enabled,
-    nfcView: nfcView,
     opts: opts || {}
   };
 }
 
-function originalStartForNormIndex(normResult, normIndex) {
+function nfcIndexForNormStart(normResult, normIndex) {
   var at = normResult.eventAt, count = normResult.eventCount || 0;
   if (!at || !count) return normIndex;
   var lo = 0, hi = count;
@@ -3687,7 +3796,7 @@ function originalStartForNormIndex(normResult, normIndex) {
   return normIndex + (lo ? normResult.eventDelta[lo - 1] : 0);
 }
 
-function originalEndForNormIndex(normResult, normEnd) {
+function nfcIndexForNormEnd(normResult, normEnd) {
   var at = normResult.eventAt, count = normResult.eventCount || 0;
   if (!at || !count) return normEnd;
   var lo = 0, hi = count;
@@ -3700,6 +3809,7 @@ function originalEndForNormIndex(normResult, normEnd) {
   var endDelta = (lo < count && at[lo] === normEnd) ? normResult.eventEndDelta[lo] : 0;
   return normEnd + beforeDelta + endDelta;
 }
+
 function searchInNormalized(normText, normPattern, mode) {
   if (!normPattern) return [];
   if (mode === 'flex') {
@@ -3721,35 +3831,26 @@ function searchInNormalized(normText, normPattern, mode) {
   return out;
 }
 
-function collectPreservedTashkeel(originalText, origStart, origEnd, normStart, opts) {
+function collectPreservedTashkeel(originalText, origStart, origEnd, normStart, opts, normResult) {
   var preserved = [];
   if (!opts || !opts.enabled || !opts.tashkeel) return preserved;
-  var normPos = normStart;
-  for (var i = origStart; i < origEnd;) {
+  var nfcMap = normResult && normResult.nfcMap;
+  for (var i = origStart; i < origEnd; i++) {
     var code = originalText.charCodeAt(i);
-    if (code === 0x000D) {
-      if (i + 1 < origEnd && originalText.charCodeAt(i + 1) === 0x000A) i += 2;
-      else i++;
-      normPos++;
-      continue;
-    }
     var isTashkeel = (code >= 0x064B && code <= 0x065F) || code === 0x0670;
-    if (isTashkeel) {
-      preserved.push({ offset: normPos - normStart, char: originalText.charAt(i) });
-      i++;
+    if (!isTashkeel) continue;
+    var nfcIndex = sourceBoundaryToNfcIndex(nfcMap, i);
+    if (!Number.isInteger(nfcIndex)) {
+      if (normResult) normResult.preservedTashkeelLimited = true;
       continue;
     }
-    if ((opts.tashkeel && code === 0x0640) || (
-      opts.hidden && (code === 0x200E || code === 0x200F ||
-      (code >= 0x202A && code <= 0x202E) ||
-      code === 0x200B || code === 0x200C || code === 0x200D ||
-      (code >= 0x2066 && code <= 0x2069) || code === 0x061C)
-    )) {
-      i++;
+    var searchIndex = searchIndexForNfcBoundary(normResult || {}, nfcIndex);
+    if (!Number.isInteger(searchIndex)) {
+      if (normResult) normResult.preservedTashkeelLimited = true;
       continue;
     }
-    i++;
-    normPos++;
+    var offset = Math.max(0, searchIndex - normStart);
+    preserved.push({ offset: offset, char: originalText.charAt(i) });
   }
   return preserved;
 }
@@ -3758,20 +3859,32 @@ function normMatchesToOriginal(normMatches, normResult, originalText, opts) {
   var out = [];
   for (var i = 0; i < normMatches.length; i++) {
     var nm = normMatches[i];
-    if (!nm || nm.length <= 0 || nm.index < 0 || nm.index + nm.length > normResult.text.length) continue;
-    var origStart = originalStartForNormIndex(normResult, nm.index);
-    var origEnd = originalEndForNormIndex(normResult, nm.index + nm.length);
-
-    if (normResult.nfcView) {
-      origStart = originalStartForNfcIndex(normResult.nfcView, origStart);
-      origEnd = originalEndForNfcIndex(normResult.nfcView, origEnd);
+    if (!nm || nm.length <= 0 || nm.index < 0 || nm.index + nm.length > normResult.text.length) {
+      normResult.mappingRejected = true;
+      continue;
     }
-    if (origStart < 0 || origEnd < origStart || origEnd > originalText.length) continue;
+    var normEnd = nm.index + nm.length;
+    var nfcStart = nfcIndexForNormStart(normResult, nm.index);
+    var nfcEnd = nfcIndexForNormEnd(normResult, normEnd);
+    if (!Number.isInteger(nfcStart) || !Number.isInteger(nfcEnd) || nfcStart < 0 || nfcEnd < nfcStart) {
+      normResult.mappingRejected = true;
+      continue;
+    }
+    if (normResult.nfcMap && !patchNfcRangeIsSafe(normResult.nfcMap, nfcStart, nfcEnd)) {
+      normResult.mappingRejected = true;
+      continue;
+    }
+    var origStart = normResult.nfcMap ? originalNfcBoundaryToSourceIndex(normResult.nfcMap, nfcStart) : nfcStart;
+    var origEnd = normResult.nfcMap ? originalNfcBoundaryToSourceIndex(normResult.nfcMap, nfcEnd) : nfcEnd;
+    if (!Number.isInteger(origStart) || !Number.isInteger(origEnd) || origStart < 0 || origEnd < origStart || origEnd > originalText.length) {
+      normResult.mappingRejected = true;
+      continue;
+    }
     out.push({
       index: origStart,
       length: origEnd - origStart,
       text: originalText.slice(origStart, origEnd),
-      preservedTashkeel: collectPreservedTashkeel(originalText, origStart, origEnd, nm.index, opts || normResult.opts)
+      preservedTashkeel: collectPreservedTashkeel(originalText, origStart, origEnd, nm.index, opts || normResult.opts, normResult)
     });
   }
   return out;
@@ -3786,7 +3899,10 @@ function matchAllNormalizedWithOpts(text, pattern, mode, opts, preparedText) {
 
 function matchAllNormalized(text, pattern, mode) {
   var opts = getPatchSmartOpts();
-  return matchAllNormalizedWithOpts(text, pattern, mode, opts, null);
+  var normResult = normalizeForSearch(text, opts, true);
+  var matches = matchAllNormalizedWithOpts(text, pattern, mode, opts, normResult);
+  matches.mappingWarning = !!(normResult.mappingRejected || normResult.preservedTashkeelLimited);
+  return matches;
 }
 
 function findSpecScopedSmart(text, s) {
@@ -3802,6 +3918,12 @@ function findSpecScopedSmart(text, s) {
   for (var si = 0; si < scopeMatches.length; si++) {
     var sm = scopeMatches[si];
     var scopeEnd = sm.index + sm.length;
+    var scopeNfcStart = nfcIndexForNormStart(normResult, sm.index);
+    var scopeNfcEnd = nfcIndexForNormEnd(normResult, scopeEnd);
+    if (normResult.nfcMap && !patchNfcRangeIsSafe(normResult.nfcMap, scopeNfcStart, scopeNfcEnd)) {
+      normResult.mappingRejected = true;
+      continue;
+    }
     var searchIn = normResult.text.slice(sm.index, scopeEnd);
     var innerMatches = searchInNormalized(searchIn, normFind, s.matchMode || 'strict');
     var absMatches = [];
@@ -3809,26 +3931,97 @@ function findSpecScopedSmart(text, s) {
       var im = innerMatches[mi];
       if (im.index + im.length <= searchIn.length) absMatches.push({ index: im.index + sm.index, length: im.length });
     }
-    if (absMatches.length) return { matches: normMatchesToOriginal(absMatches, normResult, String(text), opts), spec: s };
+    if (absMatches.length) {
+      var mappedMatches = normMatchesToOriginal(absMatches, normResult, String(text), opts);
+      return {
+        matches: mappedMatches,
+        spec: s,
+        mappingWarning: !!(normResult.mappingRejected || normResult.preservedTashkeelLimited)
+      };
+    }
   }
-  return { matches: [], spec: s };
+  return {
+    matches: [],
+    spec: s,
+    mappingWarning: !!(normResult.mappingRejected || normResult.preservedTashkeelLimited)
+  };
 }
 
 /* يسمح بإعادة إرفاق التشكيل الذي كان داخل مدى التطابق، بدل فقده عند الاستبدال الذكي. */
 function smartReplacementText(replacement, match) {
   var value = String(replacement);
   var marks = match && match.preservedTashkeel;
+
   if (!marks || !marks.length) return value;
-  if (!/[\u0600-\u06FF]/.test(value) || /[<>{};=\\]/.test(value)) return value;
-  var cursor = 0, out = '';
-  for (var i = 0; i < marks.length; i++) {
-    var baseAt = Math.max(0, Math.min(value.length, marks[i].offset));
-    // لا نضع التشكيل بعد مسافة بسبب اختلاف طول كلمة الاستبدال؛ ألحقه بآخر محرف غير فراغ.
-    while (baseAt > 0 && /\s/.test(value.charAt(baseAt - 1))) baseAt--;
-    var at = Math.max(cursor, baseAt);
-    out += value.slice(cursor, at) + marks[i].char;
-    cursor = at;
+  if (!/[\u0600-\u06FF]/.test(value) || /[<>{};=\\]/.test(value)) {
+    return value;
   }
+
+  function isCombiningMark(ch) {
+    if (!ch || ch.length !== 1) return false;
+    var code = ch.charCodeAt(0);
+    return (code >= 0x064B && code <= 0x065F) || code === 0x0670;
+  }
+
+  var cursor = 0;
+  var out = '';
+  var existingByOffset = Object.create(null);
+  var insertedByOffset = Object.create(null);
+
+  for (var i = 0; i < marks.length; i++) {
+    var mark = marks[i];
+    if (!mark || typeof mark.char !== 'string' ||
+        !isCombiningMark(mark.char)) {
+      continue;
+    }
+
+    var baseAt = Number.isFinite(mark.offset) ? mark.offset : 0;
+    baseAt = Math.max(0, Math.min(value.length, baseAt));
+
+    while (baseAt > 0 && /\s/.test(value.charAt(baseAt - 1))) {
+      baseAt--;
+    }
+
+    var key = String(baseAt);
+
+    if (!existingByOffset[key]) {
+      var existing = [];
+      var existingEnd = baseAt;
+
+      while (existingEnd < value.length &&
+             isCombiningMark(value.charAt(existingEnd))) {
+        existing.push(value.charAt(existingEnd));
+        existingEnd++;
+      }
+
+      existingByOffset[key] = {
+        marks: existing,
+        end: existingEnd
+      };
+    }
+
+    var entry = existingByOffset[key];
+
+    if (entry.marks.indexOf(mark.char) !== -1) {
+      continue;
+    }
+
+    if (!insertedByOffset[key]) {
+      insertedByOffset[key] = [];
+    }
+
+    if (insertedByOffset[key].indexOf(mark.char) !== -1) {
+      continue;
+    }
+
+    var at = Math.max(cursor, entry.end);
+
+    out += value.slice(cursor, at) + mark.char;
+    cursor = at;
+
+    insertedByOffset[key].push(mark.char);
+  }
+
   return out + value.slice(cursor);
 }
 
@@ -3837,7 +4030,10 @@ function findSpec(text, spec){
   if(!s || typeof s.find !== 'string') return {matches: [], spec: s};
   var smart = getPatchSmartOpts().enabled;
   if(!s.scope){
-    if (smart) return { matches: matchAllNormalized(text, s.find, s.matchMode || 'strict'), spec: s };
+    if (smart) {
+      var smartMatches = matchAllNormalized(text, s.find, s.matchMode || 'strict');
+      return { matches: smartMatches, spec: s, mappingWarning: !!smartMatches.mappingWarning };
+    }
     var raw = matchAll(text, s.find, s.matchMode || 'strict');
     return { matches: raw.map(function(m){return {index:m.index, text:m.text, length:m.length}}), spec: s };
   }
@@ -3969,8 +4165,6 @@ function validatePatch(p, index){
       errors.push('matchMode غير مدعوم في الخطوة '+(i+1));
     if(s.scopeMode !== undefined && VALID_MATCH_MODES.indexOf(s.scopeMode) === -1)
       errors.push('scopeMode غير مدعوم في الخطوة '+(i+1));
-    if(s.preserveTashkeel !== undefined && typeof s.preserveTashkeel !== 'boolean')
-      errors.push('preserveTashkeel يجب أن يكون boolean في الخطوة '+(i+1));
     if(s.scope !== undefined && (typeof s.scope !== 'string' || !s.scope.trim()))
       errors.push('scope يجب أن يكون نصًا غير فارغ في الخطوة '+(i+1));
   });
@@ -4043,6 +4237,14 @@ function applyOneStep(html, step){
     return {ok:false, primaryCount:0, nearMisses:[], reason:'insert فارغ فعليًا (لا نص بعد إزالة الأسطر النهائية)'};
   var mode = step.matchMode || 'strict';
   var primary = findSpec(html, {find: step.find, matchMode: mode, scope: step.scope, scopeMode: step.scopeMode});
+  if (primary.mappingWarning) {
+    return {
+      ok: false,
+      primaryCount: primary.matches.length,
+      nearMisses: [],
+      reason: 'تعذّر إثبات حدود بعض المطابقات بعد تطبيع NFC؛ أُوقف التطبيق لتجنب تغيير نطاق غير مؤكد'
+    };
+  }
 
   var countSpec;
   if(step.expectedCount !== undefined) countSpec = {expectedCount: step.expectedCount};
@@ -4063,7 +4265,7 @@ function applyOneStep(html, step){
     var out = html;
     for(var ri = primary.matches.length - 1; ri >= 0; ri--){
       var rm = primary.matches[ri];
-      var _replacementAll = (step.preserveTashkeel === false) ? step.replace : smartReplacementText(step.replace, rm);
+      var _replacementAll = smartReplacementText(step.replace, rm);
       out = out.slice(0, rm.index) + _replacementAll + out.slice(rm.index + rm.length);
     }
     return {
@@ -4078,7 +4280,7 @@ function applyOneStep(html, step){
   // Single replace (الافتراضي)
   var m = primary.matches[0];
   if(step.type === 'replace'){
-    var _replacementSingle = (step.preserveTashkeel === false) ? step.replace : smartReplacementText(step.replace, m);
+    var _replacementSingle = smartReplacementText(step.replace, m);
     var outS = html.slice(0, m.index) + _replacementSingle + html.slice(m.index + m.length);
     return {ok:true, html:outS, matched:m.text, idx:m.index, count:primary.matches.length, replacedCount: 1};
   }
@@ -4104,6 +4306,7 @@ function isApplied(html, patch){
   for(var i = 0; i < patch.appliedWhen.length; i++){
     var spec = specOf(patch.appliedWhen[i]);
     var got = findSpec(html, spec);
+    if (got.mappingWarning) return null;
     // Zero markers always means "not applied"; then enforce expected/min/max counts.
     if(got.matches.length === 0) return false;
     if(!countOk(got.matches.length, spec)) return false;
@@ -4142,7 +4345,7 @@ function applyPatch(html, patch){
   for(var ri = 0; ri < requires.length; ri++){
     var reqSpec = specOf(requires[ri]);
     var reqGot = findSpec(html, reqSpec);
-    if(!countOk(reqGot.matches.length, reqSpec)){
+    if(reqGot.mappingWarning || !countOk(reqGot.matches.length, reqSpec)){
       var reqErr = reqGot.matches.length === 0 ? 'متطلب مفقود: ' : ('شرط المتطلب غير مستوفى (وجِد ' + reqGot.matches.length + '): ');
       lines.push('<span class="fail">  ❌ ' + reqErr + preview(reqSpec.find, 90) + '</span>');
       return {status:'failed', html:html, lines:lines};
@@ -4186,6 +4389,10 @@ function runVerify(html, patch){
   for(var i = 0; i < patch.verify.length; i++){
     var v = patch.verify[i];
     var got = findSpec(html, {find: v.find, matchMode: v.matchMode || 'strict', scope: v.scope, scopeMode: v.scopeMode});
+    if (got.mappingWarning) {
+      lines.push('<span class="fail">  ✘ verify '+(i+1)+': تعذّر التحقق بسبب حدود NFC غير مؤكدة</span>');
+      return {ok:false, lines:lines};
+    }
     var cnt = got.matches.length;
     var pass = false, label = '';
     if (v.type === 'exists') {
@@ -4230,7 +4437,6 @@ function applyAllPatches(html, opts){
       html: html, lines: ['<span class="skip">ℹ️ لا رقع مُفعَّلة — لا تعديل.</span>'],
       ok: 0, applied: 0, skip: 0, fail: 0,
       patchesSucceeded: 0, verificationPassed: true,
-      verificationState: 'not-applicable',
       outputAccepted: false, aborted: true, allDisabled: true,
       verifyFailed: false, results: []
     };
@@ -4243,7 +4449,6 @@ function applyAllPatches(html, opts){
       lines: validation.errors.map(function(e){return '<span class="fail">❌ '+escHtml(e)+'</span>'}),
       ok: 0, applied: 0, skip: 0, fail: onlyEnabled.length,
       patchesSucceeded: 0, verificationPassed: false,
-      verificationState: 'not-run',
       outputAccepted: false, aborted: true, allDisabled: false,
       verifyFailed: false, results: []
     };
@@ -4281,7 +4486,6 @@ function applyAllPatches(html, opts){
       ok: ok, applied: applied, skip: skip, fail: fail,
       patchesSucceeded: ok + applied,
       verificationPassed: false,
-      verificationState: 'not-run',
       outputAccepted: false, aborted: true, allDisabled: false,
       verifyFailed: false, results: results
     };
@@ -4305,8 +4509,6 @@ function applyAllPatches(html, opts){
           ok: ok, applied: applied, skip: skip, fail: 0,
           patchesSucceeded: ok + applied,
           verificationPassed: false,
-          verificationState: 'failed',
-          verificationSkipped: _verifySkipped,
           outputAccepted: false, aborted: true, allDisabled: false,
           verifyFailed: true, results: results
         };
@@ -4326,7 +4528,6 @@ function applyAllPatches(html, opts){
       patchesSucceeded: applied,
       verificationPassed: _verifySkipped === 0,
       verificationStatus: _verifySkipped === 0 ? 'ok' : 'partial',
-      verificationState: _verifySkipped > 0 ? 'skipped' : 'passed',
       verificationSkipped: _verifySkipped,
       outputAccepted: false, aborted: false, allDisabled: false,
       verifyFailed: false, results: results
@@ -4339,7 +4540,6 @@ function applyAllPatches(html, opts){
       ok: ok, applied: applied, skip: skip, fail: fail,
       patchesSucceeded: ok + applied,
       verificationPassed: false,
-      verificationState: 'not-run',
       outputAccepted: false, aborted: true, allDisabled: false,
       verifyFailed: false, results: results
     };
@@ -4351,7 +4551,6 @@ function applyAllPatches(html, opts){
     patchesSucceeded: ok,
     verificationPassed: _verifySkipped === 0,
     verificationStatus: _verifySkipped === 0 ? 'ok' : 'partial',
-    verificationState: _verifySkipped > 0 ? 'skipped' : 'passed',
     verificationSkipped: _verifySkipped,
     outputAccepted: true, aborted: false, allDisabled: false,
     verifyFailed: false, results: results
@@ -4575,7 +4774,6 @@ function testSelectedPatch(p){
     fail:res.status === 'failed' ? 1 : 0,
     verifyFailed:false,
     verificationPassed:null,
-    verificationState:'not-run',
     aborted:false,
     outputAccepted:false,
     allDisabled:false,
@@ -5260,7 +5458,6 @@ function evidenceSerializeRun(kind, res, extra){
     ok:Number(run.ok || 0), applied:Number(run.applied || 0), skip:Number(run.skip || 0), fail:Number(run.fail || 0),
     verifyFailed:!!run.verifyFailed,
     verificationPassed:typeof run.verificationPassed === 'boolean' ? run.verificationPassed : null,
-    verificationState:resolveVerificationState(run),
     verificationSkipped:typeof run.verificationSkipped === 'number' ? run.verificationSkipped : 0,
     aborted:!!run.aborted,
     outputAccepted:!!run.outputAccepted,
@@ -5292,41 +5489,28 @@ function evidenceSerializeRun(kind, res, extra){
   }
   return record;
 }
-/* PR2-VERIFICATION-STATE-FIX-006 — explicit verification lifecycle */
-function resolveVerificationState(run){
-  run = run || {};
-  var allowed = ['passed', 'failed', 'skipped', 'not-run', 'not-applicable'];
-  if(allowed.indexOf(run.verificationState) !== -1) return run.verificationState;
-  if(run.allDisabled === true) return 'not-applicable';
-  if(run.verifyFailed === true) return 'failed';
-  if(typeof run.verificationSkipped === 'number' && run.verificationSkipped > 0) return 'skipped';
-  if(run.verificationPassed === true) return 'passed';
-  return 'not-run';
-}
 function evidenceRenderRun(record){
-  var _verificationState = resolveVerificationState(record);
-  var _verificationSkippedCount = typeof record.verificationSkipped === 'number' ? record.verificationSkipped : 0;
+  var _vSkipped = (record.verificationSkipped || 0) > 0;
   var verifyLabel;
-  if (_verificationState === 'passed') {
+  if (record.verificationPassed === true) {
     verifyLabel = record.operation === 'dry-run' ? 'passed (dry-run؛ لا يثبت الكتابة)' : 'passed';
-  } else if (_verificationState === 'failed') {
+  } else if (record.verifyFailed === true) {
     verifyLabel = 'failed';
-  } else if (_verificationState === 'skipped') {
-    verifyLabel = 'skipped (' + _verificationSkippedCount + ' رقعة بلا verify)';
-  } else if (_verificationState === 'not-applicable') {
-    verifyLabel = 'not-applicable';
+  } else if (record.verificationPassed === false && _vSkipped) {
+    verifyLabel = 'skipped (' + record.verificationSkipped + ' رقعة بلا verify)';
+  } else if (record.verificationPassed === false) {
+    verifyLabel = 'failed';
   } else {
-    verifyLabel = 'not-run';
+    verifyLabel = 'not completed';
   }
   var judgement;
   if(record.operation === 'dry-run') judgement = 'dry-run only — no file write was performed';
-  else if(_verificationState === 'failed') judgement = 'verify-failed';
-  else if(_verificationState === 'skipped') judgement = 'verify-skipped (patches without verify; not proof of failure)';
-  else if(_verificationState === 'not-applicable') judgement = 'verify-not-applicable (no enabled patches; no verification required)';
-  else if(_verificationState === 'not-run') judgement = 'verify-not-run (engine verification was not executed)';
+  else if(record.verifyFailed === true) judgement = 'verify-failed';
+  else if(record.verificationPassed === false && _vSkipped) judgement = 'verify-skipped (patches without verify; not proof of failure)';
+  else if(record.verificationPassed === false) judgement = 'verify-failed';
   else if(record.actualFileSha256 && record.outputSha256 && record.actualFileSha256 !== record.outputSha256) judgement = 'WARNING: actual disk SHA-256 differs from candidate; inspect the file and rollback status';
-  else if(record.actualFileSha256 && record.outputSha256 && record.actualFileSha256 === record.outputSha256 && String(record.saveStatus || '').indexOf('direct-write-success') !== -1) judgement = 'verify-passed (engine verify + evidence logger confirmed actual disk SHA-256 matches candidate)';
-  else if(_verificationState === 'passed') judgement = 'verify-passed (engine level only; physical save not proven by this record)';
+  else if(record.actualFileSha256 && record.outputSha256 && record.actualFileSha256 === record.outputSha256 && String(record.saveStatus || '').indexOf('direct-write-success') !== -1) judgement = record.verificationPassed === true ? 'verify-passed (engine verify + evidence logger confirmed actual disk SHA-256 matches candidate)' : 'actual disk SHA-256 matches candidate; engine verify incomplete';
+  else if(record.verificationPassed === true) judgement = 'verify-passed (engine level only; physical save not proven by this record)';
   else judgement = 'not fully verified';
   var lines = [
     '<!-- evidence-id: ' + record.id + ' -->',
@@ -6690,7 +6874,7 @@ document.querySelectorAll('input[name="saveMode"]').forEach(function(radio){
       currentLineEnding = detectLineEnding(rawText);
       currentLineEndings = extractLineEndings(rawText);
       directOpenedSnapshot = rawText;
-      // Fix BUG-A: update currentTargetRawEvidence to prevent SHA/size leak between files.
+      // BUG-A: refresh raw-byte identity on every direct open so evidence cannot leak from the prior file.
       var _directRawToken = ++currentTargetRawToken;
       currentTargetRawEvidence = {name: file.name, size: rawBytes.length, sha256: null, token: _directRawToken, targetEngineVersion: null};
       currentTargetRawHashPromise = sha256Hex(rawBytes).then(function(_directHash){
@@ -7845,7 +8029,7 @@ function buildAddBlockPatch(anchor, content, position, blockType) {
         var manifest = {
           schemaVersion: 1,
           format: 'raqee3-patched-files-bundle',
-          tool: { name: 'رقيع المطور', version: '7.0.8' },
+          tool: { name: 'رقيع المطور', version: '8.0.0' },
           createdAt: new Date().toISOString(),
           source_type: 'mock_import',
           source: {
